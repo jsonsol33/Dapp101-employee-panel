@@ -12,64 +12,89 @@ interface IERC20Token {
   event Transfer(address indexed from, address indexed to, uint256 value);
   event Approval(address indexed owner, address indexed spender, uint256 value);
 }
- 
-contract Payroll {
 
-    address internal cUsdTokenAddress = 0x874069Fa1Eb16D44d622F2e0Ca25eeA172369bC1;
+contract Payroll {
+    address private _cUsdTokenAddress;
+    address private _owner;
+    mapping(address => Employee) private _employees;
+
+    enum EmployeeStatus { Active, Inactive }
 
     struct Employee {
         string name;
         uint age;
         uint salary;
-        address employeeAddress;
+        EmployeeStatus status;
     }
 
-    Employee[] employees;
+    event EmployeeAdded(address indexed employeeAddress, string name, uint age, uint salary);
+    event EmployeePaid(address indexed employeeAddress, uint amount);
+    event EmployeeUpdated(address indexed employeeAddress, uint newSalary);
+    event EmployeeRemoved(address indexed employeeAddress);
 
-    function addEmployee(string memory name, uint age, uint salary, address employeeAddress) public {
-        Employee memory newEmployee = Employee(name, age, salary, employeeAddress);
-        employees.push(newEmployee);
-    }
-   
-
-
-  function payEmployees(address employeeAddress, uint salary) public {
-      IERC20Token cUsdToken = IERC20Token(cUsdTokenAddress);
-        cUsdToken.approve(address(this), 100000000);
-
-        bool success = cUsdToken.transferFrom(msg.sender, employeeAddress, salary);
-        require(success, "Payment to employee failed");
+    modifier onlyOwner() {
+        require(msg.sender == _owner, "Not authorized");
+        _;
     }
 
-      function getEmployees() public view returns (Employee[] memory) {
-        return employees;
+    constructor(address cUsdTokenAddress) {
+        _cUsdTokenAddress = cUsdTokenAddress;
+        _owner = msg.sender;
     }
 
-    function fireEmployee(address employeeAddress) public {
-    // require(msg.sender == owner, "Only the owner can fire employees");
-    uint indexToRemove = findEmployeeIndex(employeeAddress);
-    require(indexToRemove < employees.length, "Employee not found");
-    employees[indexToRemove] = employees[employees.length - 1];
-    employees.pop();
-}
+    function addEmployee(string memory name, uint age, uint salary, address employeeAddress) public onlyOwner {
+        require(employeeAddress != address(0), "Invalid employee address");
+        require(_employees[employeeAddress].age == 0, "Employee already exists");
 
-function findEmployeeIndex(address employeeAddress) internal view returns (uint) {
-    for (uint i = 0; i < employees.length; i++) {
-        if (employees[i].employeeAddress == employeeAddress) {
-            return i;
+        Employee memory newEmployee = Employee(name, age, salary, EmployeeStatus.Active);
+        _employees[employeeAddress] = newEmployee;
+
+        emit EmployeeAdded(employeeAddress, name, age, salary);
+    }
+
+    function payEmployees(address[] memory employeeAddresses, uint256[] memory salaries) public {
+        IERC20Token cUsdToken = IERC20Token(_cUsdTokenAddress);
+        uint256 totalAmount;
+
+        // Calculate the total amount to pay all employees
+        for (uint256 i = 0; i < employeeAddresses.length; i++) {
+            require(_employees[employeeAddresses[i]].status == EmployeeStatus.Active, "Employee not active");
+            totalAmount += salaries[i];
+            require(totalAmount >= salaries[i], "Integer overflow");
+        }
+
+        // Approve the transfer of funds from the sender to the contract
+        cUsdToken.approve(address(this), totalAmount);
+
+        // Transfer funds to each employee
+        for (uint256 i = 0; i < employeeAddresses.length; i++) {
+            bool success = cUsdToken.transferFrom(msg.sender, employeeAddresses[i], salaries[i]);
+            require(success, "Payment to employee failed");
+            emit EmployeePaid(employeeAddresses[i], salaries[i]);
         }
     }
-    return employees.length;
+
+    function getEmployee(address employeeAddress) public view returns (string memory, uint, uint, EmployeeStatus) {
+        Employee memory employee = _employees[employeeAddress];
+        require(employee.age != 0, "Employee not found");
+        return (employee.name, employee.age, employee.salary, employee.status);
+    }
+
+    function removeEmployee(address employeeAddress) public onlyOwner {
+        Employee storage employee = _employees[employeeAddress];
+        require(employee.age != 0, "Employee not found");
+
+        employee.status = EmployeeStatus.Inactive;
+
+        emit EmployeeRemoved(employeeAddress);
+    }
+
+    function updateSalary(address employeeAddress, uint newSalary) public onlyOwner {
+        Employee storage employee = _employees[employeeAddress];
+        require(employee.age != 0, "Employee not found");
+
+        employee.salary = newSalary;
+
+        emit EmployeeUpdated(employeeAddress, newSalary);
+    }
 }
-
-function updateSalary(address employeeAddress, uint newSalary) public {
-    // require(msg.sender == owner, "Only the owner can update employee salary");
-    uint indexToUpdate = findEmployeeIndex(employeeAddress);
-    require(indexToUpdate < employees.length, "Employee not found");
-    employees[indexToUpdate].salary = newSalary;
-}
-
-
-}
-
-
